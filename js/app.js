@@ -5,7 +5,7 @@
   var VIENNA = [48.2082, 16.3738];
   var DEFAULT_ZOOM = 13;
   var STORAGE_KEY = 'draw-map-app:v1';
-  var TIP_KEY = 'draw-map-app:tip-v1';
+  var TIP_KEY = 'draw-map-app:onboard-v2';
   var EARTH_R = 6378137;
   var COLORS = [
     '#e53935', '#fb8c00', '#fdd835', '#43a047',
@@ -14,6 +14,7 @@
   var LIGHT_COLORS = { '#ffffff': 1, '#fdd835': 1, '#fff': 1 };
   var DRAG_TOOLS = { pen: 1, rectangle: 1, circle: 1, route: 1 };
   var VERTEX_TOOLS = { line: 1, polygon: 1 };
+  var MORE_TOOLS = { rectangle: 1, circle: 1, erase: 1 };
   var MAX_UNDO = 50;
   var MODE_KEY = 'draw-map-app:route-mode';
   var ROUTE_COLOR = '#1a73e8';
@@ -41,7 +42,7 @@
     }
   };
 
-  var map, streetsLayer, satelliteLayer, drawn, draft, locateLayer;
+  var map, lightStreetsLayer, darkStreetsLayer, satelliteLayer, drawn, draft, locateLayer;
   var currentBase = 'streets';
   var tool = 'pan';
   var color = COLORS[0];
@@ -69,6 +70,16 @@
 
   /* ---------- helpers ---------- */
   function $(id) { return document.getElementById(id); }
+
+  function prefersDark() {
+    return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  }
+
+  function applyThemeMeta() {
+    document.documentElement.dataset.theme = prefersDark() ? 'dark' : 'light';
+    document.body.classList.toggle('is-dark', prefersDark());
+  }
+
 
   function nowId() {
     idSeq += 1;
@@ -572,6 +583,13 @@
       if (on && btn.scrollIntoView) btn.scrollIntoView({ inline: 'nearest', block: 'nearest' });
     });
     setMapInteractive(tool === 'pan' || (tool === 'route' && !!routePreview && !routeBusy));
+    closeMore();
+    var moreBtn = $('btn-more');
+    if (moreBtn) {
+      var onMore = !!MORE_TOOLS[tool];
+      moreBtn.classList.toggle('is-active', onMore);
+      moreBtn.setAttribute('aria-pressed', onMore ? 'true' : 'false');
+    }
     if (tool === 'erase') toast('Tap a drawing to delete it');
     if (tool === 'route') toast('Draw a rough path to snap it to roads');
     updateHint();
@@ -634,12 +652,15 @@
     }
     var modes = $('route-modes');
     if (modes) {
-      modes.classList.toggle('hidden', tool !== 'route' || !!routePreview);
+      modes.classList.toggle('hidden', tool !== 'route');
     }
     bar.classList.toggle('hidden', !show);
     bar.hidden = !show;
     document.body.classList.toggle('has-hint', show && !routePreview);
     document.body.classList.toggle('has-route-card', !!routePreview);
+    var opts = $('tool-options');
+    if (opts) opts.classList.toggle('hidden', !!routePreview || tool === 'erase' || tool === 'marker');
+    syncDrawer();
   }
 
   function clearVertexMarkers() {
@@ -719,7 +740,7 @@
 
   function eventOnUi(target) {
     return !!(target && target.closest && target.closest(
-      '.top-ui, .dock, .hint-bar, .route-card, .route-loading, .sheet, .install-tip, .toast, .leaflet-control, .leaflet-popup'
+      '.top-ui, .side-controls, .dock, .drawer, #bottom-stack, #more-sheet, .hint-bar, .route-card, .route-loading, .sheet, .onboard, .install-tip, .toast, .leaflet-control, .leaflet-popup'
     ));
   }
 
@@ -953,37 +974,27 @@
     });
   }
 
-  function openMenu() {
-    openSheet('Draw Map', function (body) {
-      body.innerHTML =
-        '<div class="menu-list">' +
-        '<button type="button" class="menu-item" id="m-gmaps">Open in Google Maps</button>' +
-        '<button type="button" class="menu-item" id="m-geojson">Export GeoJSON</button>' +
-        '<button type="button" class="menu-item" id="m-import">Import GeoJSON</button>' +
-        '<button type="button" class="menu-item" id="m-png">Export PNG screenshot</button>' +
-        '<button type="button" class="menu-item" id="m-help">Help &amp; install</button>' +
-        '</div>' +
-        '<input id="import-file" type="file" accept=".json,.geojson,application/geo+json,application/json" hidden>';
-      $('m-gmaps').onclick = function () { closeSheet(); openInGoogleMaps(); };
-      $('m-geojson').onclick = function () { closeSheet(); exportGeoJSON(); };
-      $('m-png').onclick = function () { closeSheet(); exportPng(); };
-      $('m-help').onclick = function () { openHelp(); };
-      $('m-import').onclick = function () { $('import-file').click(); };
-      $('import-file').addEventListener('change', function (ev) {
-        var file = ev.target.files && ev.target.files[0];
-        ev.target.value = '';
-        if (!file) return;
-        closeSheet();
-        importGeoJSONFile(file);
-      });
-    });
+  function openMore() {
+    var el = $('more-sheet');
+    if (!el) return;
+    el.classList.remove('hidden');
+    el.hidden = false;
   }
+
+  function closeMore() {
+    var el = $('more-sheet');
+    if (!el) return;
+    el.classList.add('hidden');
+    el.hidden = true;
+  }
+
+  function openMenu() { openMore(); }
 
   function openHelp() {
     openSheet('How to use', function (body) {
       body.innerHTML =
         '<p>Drawings stay anchored to the map when you pan or zoom. Turn on a tool to draw; switch back to <strong>Pan</strong> to move the map with one finger.</p>' +
-        '<p><strong>Pen</strong> is freehand. <strong>Line</strong> and <strong>Area</strong> add a point each time you tap — then press Done. <strong>Rect</strong> and <strong>Circle</strong> are drag gestures. <strong>Pin</strong> drops a labeled marker.</p>' +
+        '<p><strong>Pen</strong> is freehand. <strong>Line</strong> and <strong>Area</strong> add a point each time you tap — then press Done. <strong>Pin</strong> drops a labeled marker. Open <strong>More</strong> for rectangle, circle, eraser, and exports.</p>' +
         '<p><strong>Route</strong> lets you sketch a rough path, then snaps it to the closest walk, bike, or car route. Keep it, export a GPX file, or open the directions in Google Maps.</p>' +
         '<p>Distances and areas use metric units. Work is auto-saved in this browser.</p>' +
         '<p><strong>iPhone Safari:</strong> Share button → Add to Home Screen.</p>' +
@@ -1034,12 +1045,17 @@
 
   function showRouteCard(result, mode) {
     var cfg = ROUTE_MODES[mode] || ROUTE_MODES.walk;
+    var dist = fmtDistance(result.distance);
+    var dur = fmtDuration(result.duration);
     $('route-card-title').textContent = cfg.label + ' route';
-    $('route-card-stats').textContent = fmtDistance(result.distance) + ' · ' + fmtDuration(result.duration);
+    $('route-card-stats').textContent = dist + ' · ' + dur;
+    if ($('route-distance')) $('route-distance').textContent = dist;
+    if ($('route-time')) $('route-time').textContent = dur;
     var card = $('route-card');
     card.classList.remove('hidden');
     card.hidden = false;
     document.body.classList.add('has-route-card');
+    syncDrawer();
   }
 
   function clearRoutePreview() {
@@ -1409,15 +1425,25 @@
     map.locate({ setView: true, maxZoom: 16, enableHighAccuracy: true, timeout: 12000 });
   }
 
+  function layerForBase(name) {
+    if (name === 'satellite') return satelliteLayer;
+    if (name === 'dark') return darkStreetsLayer;
+    return lightStreetsLayer;
+  }
+
   function setBasemap(name, silent) {
-    currentBase = name === 'satellite' ? 'satellite' : 'streets';
-    if (currentBase === 'satellite') {
-      if (map.hasLayer(streetsLayer)) map.removeLayer(streetsLayer);
-      if (!map.hasLayer(satelliteLayer)) satelliteLayer.addTo(map);
-    } else {
-      if (map.hasLayer(satelliteLayer)) map.removeLayer(satelliteLayer);
-      if (!map.hasLayer(streetsLayer)) streetsLayer.addTo(map);
-    }
+    if (name === 'satellite') currentBase = 'satellite';
+    else if (name === 'dark') currentBase = 'dark';
+    else currentBase = 'streets';
+    var next = layerForBase(currentBase);
+    [lightStreetsLayer, darkStreetsLayer, satelliteLayer].forEach(function (lyr) {
+      if (!lyr) return;
+      if (lyr === next) {
+        if (!map.hasLayer(lyr)) lyr.addTo(map);
+      } else if (map.hasLayer(lyr)) {
+        map.removeLayer(lyr);
+      }
+    });
     document.querySelectorAll('.layer-option').forEach(function (b) {
       b.classList.toggle('is-active', b.getAttribute('data-layer') === currentBase);
     });
@@ -1483,6 +1509,7 @@
   function corsTileUrl(src) {
     var m = src.match(/tile\.openstreetmap\.org\/(\d+)\/(\d+)\/(\d+)\.png/);
     if (m) return 'https://a.basemaps.cartocdn.com/rastertiles/voyager/' + m[1] + '/' + m[2] + '/' + m[3] + '.png';
+    if (/arcgisonline\.com\/.*MapServer\/tile\/\d+\/\d+\/\d+/i.test(src)) return src;
     var esri = src.match(/MapServer\/tile\/(\d+)\/(\d+)\/(\d+)/);
     if (esri) return 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/' + esri[1] + '/' + esri[2] + '/' + esri[3];
     var carto = src.match(/basemaps\.cartocdn\.com\/[^/]+\/(\d+)\/(\d+)\/(\d+)/);
@@ -1547,7 +1574,7 @@
     canvas.height = Math.round(size.y * dpr);
     var ctx = canvas.getContext('2d');
     ctx.scale(dpr, dpr);
-    ctx.fillStyle = currentBase === 'satellite' ? '#1a1a1a' : '#d5e0c8';
+    ctx.fillStyle = (currentBase === 'satellite' || currentBase === 'dark') ? '#1a1a1a' : '#d5e0c8';
     ctx.fillRect(0, 0, size.x, size.y);
 
     var containerRect = map.getContainer().getBoundingClientRect();
@@ -1632,7 +1659,9 @@
       ctx.textBaseline = 'middle';
       var credit = currentBase === 'satellite'
         ? 'Draw Map · Tiles © Esri · Screenshot may use satellite imagery'
-        : 'Draw Map · Map data © OpenStreetMap · Tiles in export © CARTO';
+        : (currentBase === 'dark'
+          ? 'Draw Map · Tiles © Esri'
+          : 'Draw Map · Map data © OpenStreetMap · Tiles in export © CARTO');
       ctx.fillText(credit, 8, size.y - 11, size.x - 16);
 
       canvas.toBlob(function (blob) {
@@ -1648,8 +1677,82 @@
     });
   }
 
+  /* ---------- bottom drawer + more sheet ---------- */
+  var drawerMode = 'peek';
+
+  function drawerHeights() {
+    return { peek: 22, mid: 200, route: 328 };
+  }
+
+  function updateChromeBottom(drawerH) {
+    var h = drawerH;
+    if (h == null) {
+      var el = $('drawer');
+      h = el ? el.getBoundingClientRect().height : 22;
+    }
+    document.documentElement.style.setProperty(
+      '--chrome-bottom',
+      'calc(' + Math.round(h + 8 + 66) + 'px + var(--safe-bottom))'
+    );
+  }
+
+  function setDrawerMode(mode) {
+    var drawer = $('drawer');
+    if (!drawer) return;
+    drawerMode = mode === 'route' ? 'route' : (mode === 'mid' ? 'mid' : 'peek');
+    drawer.classList.remove('is-peek', 'is-mid', 'is-route');
+    drawer.classList.add('is-' + drawerMode);
+    var h = drawerHeights()[drawerMode];
+    drawer.style.height = h + 'px';
+    updateChromeBottom(h);
+  }
+
+  function syncDrawer() {
+    if (routePreview) setDrawerMode('route');
+    else if (tool !== 'pan') setDrawerMode('mid');
+    else setDrawerMode('peek');
+  }
+
+  function initDrawer() {
+    var drawer = $('drawer');
+    var handle = $('drawer-handle');
+    if (!drawer || !handle) return;
+    var startY = 0, startH = 0, pointerId = null;
+    handle.addEventListener('pointerdown', function (ev) {
+      if (ev.isPrimary === false) return;
+      ev.preventDefault();
+      pointerId = ev.pointerId;
+      startY = ev.clientY;
+      startH = drawer.getBoundingClientRect().height;
+      drawer.classList.add('is-dragging');
+      try { handle.setPointerCapture(ev.pointerId); } catch (e) { /* ignore */ }
+    });
+    handle.addEventListener('pointermove', function (ev) {
+      if (pointerId == null || ev.pointerId !== pointerId) return;
+      ev.preventDefault();
+      var next = Math.max(22, Math.min(380, startH - (ev.clientY - startY)));
+      drawer.style.height = next + 'px';
+      updateChromeBottom(next);
+    });
+    function endDrag(ev) {
+      if (pointerId == null || (ev && ev.pointerId !== pointerId)) return;
+      pointerId = null;
+      drawer.classList.remove('is-dragging');
+      var h = drawer.getBoundingClientRect().height;
+      var hs = drawerHeights();
+      var target;
+      if (routePreview) target = h < (hs.peek + hs.route) / 2 ? 'peek' : 'route';
+      else if (tool !== 'pan') target = h < (hs.peek + hs.mid) / 2 ? 'peek' : 'mid';
+      else target = h > (hs.peek + hs.mid) / 2 ? 'mid' : 'peek';
+      setDrawerMode(target);
+    }
+    handle.addEventListener('pointerup', endDrag);
+    handle.addEventListener('pointercancel', endDrag);
+  }
+
   /* ---------- UI wiring ---------- */
   function buildSwatches() {
+
     var box = $('color-swatches');
     COLORS.forEach(function (hex) {
       var b = document.createElement('button');
@@ -1672,7 +1775,7 @@
   function preventPageBounce() {
     document.addEventListener('touchmove', function (e) {
       var t = e.target;
-      if (t && t.closest && t.closest('#search-results, .sheet-card, input, textarea')) return;
+      if (t && t.closest && t.closest('#search-results, .sheet-card, .drawer, #more-sheet, .onboard, input, textarea')) return;
       if (e.touches && e.touches.length > 1 && isDrawMode()) e.preventDefault();
       if (isDrawMode() && t && t.closest && t.closest('#map, .leaflet-container')) e.preventDefault();
     }, { passive: false });
@@ -1692,10 +1795,24 @@
       bounceAtZoomLimits: false
     }).setView(VIENNA, DEFAULT_ZOOM);
 
-    streetsLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    if (prefersDark()) currentBase = 'dark';
+    lightStreetsLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
     });
+    var darkBase = L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+      {
+        maxZoom: 19,
+        maxNativeZoom: 16,
+        attribution: 'Tiles &copy; <a href="https://www.esri.com/">Esri</a>'
+      }
+    );
+    var darkRef = L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}',
+      { maxZoom: 19, maxNativeZoom: 16, attribution: '' }
+    );
+    darkStreetsLayer = L.layerGroup([darkBase, darkRef]);
     satelliteLayer = L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
       {
@@ -1703,7 +1820,7 @@
         attribution: 'Tiles &copy; <a href="https://www.esri.com/">Esri</a>'
       }
     );
-    streetsLayer.addTo(map);
+    layerForBase(currentBase).addTo(map);
     L.control.scale({ metric: true, imperial: false, position: 'bottomleft' }).addTo(map);
     map.attributionControl.setPrefix('');
 
@@ -1758,8 +1875,25 @@
     $('btn-undo-vertex').addEventListener('click', undoVertex);
     $('btn-finish-draft').addEventListener('click', finishVertexShape);
     $('btn-locate').addEventListener('click', locateMe);
-    $('btn-menu').addEventListener('click', openMenu);
+    $('btn-more').addEventListener('click', function (e) {
+      e.stopPropagation();
+      openMore();
+    });
+    if ($('more-backdrop')) $('more-backdrop').addEventListener('click', closeMore);
     $('sheet-backdrop').addEventListener('click', closeSheet);
+    if ($('m-gmaps')) $('m-gmaps').addEventListener('click', function () { closeMore(); openInGoogleMaps(); });
+    if ($('m-geojson')) $('m-geojson').addEventListener('click', function () { closeMore(); exportGeoJSON(); });
+    if ($('m-png')) $('m-png').addEventListener('click', function () { closeMore(); exportPng(); });
+    if ($('m-help')) $('m-help').addEventListener('click', function () { closeMore(); openHelp(); });
+    if ($('m-import')) $('m-import').addEventListener('click', function () { $('import-file').click(); });
+    if ($('import-file')) $('import-file').addEventListener('change', function (ev) {
+      var file = ev.target.files && ev.target.files[0];
+      ev.target.value = '';
+      if (!file) return;
+      closeMore();
+      importGeoJSONFile(file);
+    });
+    initDrawer();
 
     $('btn-layers').addEventListener('click', function (e) {
       e.stopPropagation();
@@ -1793,7 +1927,7 @@
     });
 
     document.addEventListener('click', function (e) {
-      if (!e.target.closest('.top-ui')) {
+      if (!e.target.closest('.top-ui, .side-controls')) {
         hideSearchResults();
         $('layer-menu').classList.add('hidden');
       }
@@ -1829,7 +1963,7 @@
       try { localStorage.setItem(TIP_KEY, '1'); } catch (e) { /* ignore */ }
     });
 
-    if (!localStorage.getItem(TIP_KEY) && !window.navigator.standalone) {
+    if (!localStorage.getItem(TIP_KEY)) {
       $('install-tip').classList.remove('hidden');
       $('install-tip').hidden = false;
     }
@@ -1845,9 +1979,16 @@
   }
 
   /* ---------- boot ---------- */
+  applyThemeMeta();
+  if (window.matchMedia) {
+    var schemeMq = window.matchMedia('(prefers-color-scheme: dark)');
+    if (schemeMq.addEventListener) schemeMq.addEventListener('change', applyThemeMeta);
+    else if (schemeMq.addListener) schemeMq.addListener(applyThemeMeta);
+  }
   initMap();
   wireUi();
   restore();
+  setBasemap(currentBase, true);
   setTool('pan');
   preventPageBounce();
   registerSw();

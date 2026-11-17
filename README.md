@@ -39,6 +39,7 @@ Then visit `http://localhost:8080` on the same computer, or `http://YOUR-LAN-IP:
 - Export / import GeoJSON
 - Export a PNG screenshot (share or download)
 - **Open in Google Maps** jumps to the current map center
+- **Draw my route:** sketch a rough path, snap it to the closest walk / bike / car route, then Keep it, export GPX, or open turn-by-turn directions in Google Maps
 
 ## Hosting (free)
 
@@ -68,3 +69,4 @@ A Netlify account is optional for a short-lived drop; signing in keeps the site 
 - Place search uses Nominatim and is for light, interactive use.
 - PNG export redraws tiles from a CORS-friendly source. Street-map screenshots may use CARTO Voyager tiles under your drawings (OpenStreetMap tiles do not allow canvas export). Satellite screenshots use Esri.
 - Drawings are stored only in this browser, not in Google Maps.
+- **Draw my route** uses public OSRM servers (car: router.project-osrm.org; walk/bike: routing.openstreetmap.de). Those services can be slow or temporarily unavailable, and they are for light interactive use. Map matching tolerates sloppy drawing up to about 40 m from a road; if matching fails or the path has gaps, the app falls back to routing through sampled waypoints. Google Maps directions get the start, end, and up to 8 midpoints of the snapped route, so the path in Google Maps may be a simplified version of what you drew.

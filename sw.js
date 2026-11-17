@@ -1,5 +1,5 @@
 /* Draw Map service worker — caches the app shell, not map tiles. */
-var CACHE = 'draw-map-app-v1';
+var CACHE = 'draw-map-app-v2';
 var SHELL = [
   './',
   './index.html',

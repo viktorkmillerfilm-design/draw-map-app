@@ -62,12 +62,37 @@
   </div>
 
   <div id="hint-bar" class="hint-bar hidden" hidden>
-    <p id="hint-text">Tap to add points</p>
-    <div class="hint-actions">
-      <button type="button" id="btn-cancel-draft" class="chip">Cancel</button>
-      <button type="button" id="btn-undo-vertex" class="chip hidden">Back</button>
-      <button type="button" id="btn-finish-draft" class="chip primary">Done</button>
+    <div id="route-modes" class="route-modes hidden" role="group" aria-label="Travel mode">
+      <button type="button" class="chip mode is-active" data-mode="walk">Walk</button>
+      <button type="button" class="chip mode" data-mode="bike">Bike</button>
+      <button type="button" class="chip mode" data-mode="car">Car</button>
     </div>
+    <div class="hint-main">
+      <p id="hint-text">Tap to add points</p>
+      <div class="hint-actions">
+        <button type="button" id="btn-cancel-draft" class="chip">Cancel</button>
+        <button type="button" id="btn-undo-vertex" class="chip hidden">Back</button>
+        <button type="button" id="btn-finish-draft" class="chip primary">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="route-card" class="route-card hidden" hidden>
+    <div class="route-card-main">
+      <div id="route-card-title" class="route-card-title">Route</div>
+      <div id="route-card-stats" class="route-card-stats"></div>
+    </div>
+    <div class="route-card-actions">
+      <button type="button" id="btn-route-discard" class="chip">Discard</button>
+      <button type="button" id="btn-route-keep" class="chip primary">Keep</button>
+      <button type="button" id="btn-route-gmaps" class="chip">Google Maps</button>
+      <button type="button" id="btn-route-gpx" class="chip">GPX</button>
+    </div>
+  </div>
+
+  <div id="route-loading" class="route-loading hidden" hidden role="status" aria-live="polite">
+    <div class="spinner" aria-hidden="true"></div>
+    <p>Finding the closest route…</p>
   </div>
 
   <div id="dock" class="dock">
@@ -75,6 +100,10 @@
       <button type="button" id="btn-pan" class="tool is-active" data-tool="pan" aria-pressed="true" aria-label="Pan map">
         <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11V5a1.5 1.5 0 013 0v6m0 0V7a1.5 1.5 0 013 0v7m0 0V9a1.5 1.5 0 013 0v8.5a3.5 3.5 0 01-3.5 3.5h-2.2A5.3 5.3 0 018 17.2V15m0-4L6.2 13.2A2 2 0 005 14.8V15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <span>Pan</span>
+      </button>
+      <button type="button" id="btn-route" class="tool" data-tool="route" aria-pressed="false" aria-label="Draw my route, snap to roads">
+        <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5.5" cy="17.5" r="2.2" fill="currentColor"/><circle cx="18.5" cy="6.5" r="2.2" fill="currentColor"/><path d="M7.2 16.2c2.2-2.6 3.4-3.2 5.1-3.2 1.4 0 1.8.9 3.1 1.8 1.3.9 2.2.4 2.6-0.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        <span>Route</span>
       </button>
       <button type="button" id="btn-pen" class="tool" data-tool="pen" aria-pressed="false" aria-label="Freehand pen">
         <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l4.2-1.1L19 8.1a2 2 0 00-2.8-2.8L5.5 16.1 4 20z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M14.8 6.7l2.8 2.8" stroke="currentColor" stroke-width="1.7"/></svg>

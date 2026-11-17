@@ -12,9 +12,34 @@
     '#1e88e5', '#8e24aa', '#ffffff', '#212121'
   ];
   var LIGHT_COLORS = { '#ffffff': 1, '#fdd835': 1, '#fff': 1 };
-  var DRAG_TOOLS = { pen: 1, rectangle: 1, circle: 1 };
+  var DRAG_TOOLS = { pen: 1, rectangle: 1, circle: 1, route: 1 };
   var VERTEX_TOOLS = { line: 1, polygon: 1 };
   var MAX_UNDO = 50;
+  var MODE_KEY = 'draw-map-app:route-mode';
+  var ROUTE_COLOR = '#1a73e8';
+  var ROUTE_CASING = '#083570';
+  var MATCH_RADIUS = 40;
+  var MATCH_MAX_POINTS = 100;
+  var ROUTE_MODES = {
+    walk: {
+      label: 'Walk',
+      travelmode: 'walking',
+      matchUrl: 'https://routing.openstreetmap.de/routed-foot/match/v1/foot',
+      routeUrl: 'https://routing.openstreetmap.de/routed-foot/route/v1/foot'
+    },
+    bike: {
+      label: 'Bike',
+      travelmode: 'bicycling',
+      matchUrl: 'https://routing.openstreetmap.de/routed-bike/match/v1/bike',
+      routeUrl: 'https://routing.openstreetmap.de/routed-bike/route/v1/bike'
+    },
+    car: {
+      label: 'Car',
+      travelmode: 'driving',
+      matchUrl: 'https://router.project-osrm.org/match/v1/driving',
+      routeUrl: 'https://router.project-osrm.org/route/v1/driving'
+    }
+  };
 
   var map, streetsLayer, satelliteLayer, drawn, draft, locateLayer;
   var currentBase = 'streets';
@@ -37,6 +62,10 @@
   var tapCandidate = null;
   var ignoreClickUntil = 0;
   var locateMarker = null;
+  var routeMode = 'walk';
+  var routePreview = null;
+  var routeBusy = false;
+  var routeLayerGroup = null;
 
   /* ---------- helpers ---------- */
   function $(id) { return document.getElementById(id); }
@@ -112,6 +141,17 @@
       return Math.round(m2).toLocaleString('de-AT') + ' m²';
     }
     return (m2 / 1e6).toFixed(m2 < 1e7 ? 2 : 1) + ' km²';
+  }
+
+  function fmtDuration(sec) {
+    if (!isFinite(sec) || sec < 0) return '';
+    var s = Math.round(sec);
+    if (s < 30) return '< 1 min';
+    var m = Math.round(s / 60);
+    if (m < 60) return m + ' min';
+    var h = Math.floor(m / 60);
+    var rm = m % 60;
+    return rm ? (h + ' h ' + rm + ' min') : (h + ' h');
   }
 
   function flattenLatLngs(ll) {
@@ -199,6 +239,16 @@
 
   /* ---------- measurements ---------- */
   function measurementFor(layer, toolName) {
+    var props = layer.featureProps || {};
+    if (toolName === 'route' || props.tool === 'route') {
+      var parts = [];
+      var modeCfg = ROUTE_MODES[props.mode];
+      if (modeCfg) parts.push(modeCfg.label);
+      var dist = props.distance != null ? props.distance : (layer.getLatLngs ? pathLength(flattenLatLngs(layer.getLatLngs())) : 0);
+      parts.push(fmtDistance(dist));
+      if (props.duration != null) parts.push(fmtDuration(props.duration));
+      return parts.join(' · ');
+    }
     if (toolName === 'circle' || layer instanceof L.Circle) {
       var r = layer.getRadius();
       return fmtDistance(r) + ' radius · ' + fmtArea(Math.PI * r * r);
@@ -513,6 +563,7 @@
       /* tapping the same draw tool keeps it */
     }
     cancelDraft();
+    if (next !== 'route' && next !== 'pan') clearRoutePreview();
     tool = next;
     document.querySelectorAll('.tool').forEach(function (btn) {
       var on = btn.getAttribute('data-tool') === tool;
@@ -520,9 +571,11 @@
       btn.setAttribute('aria-pressed', on ? 'true' : 'false');
       if (on && btn.scrollIntoView) btn.scrollIntoView({ inline: 'nearest', block: 'nearest' });
     });
-    setMapInteractive(tool === 'pan');
+    setMapInteractive(tool === 'pan' || (tool === 'route' && !!routePreview && !routeBusy));
     if (tool === 'erase') toast('Tap a drawing to delete it');
+    if (tool === 'route') toast('Draw a rough path to snap it to roads');
     updateHint();
+    updateRouteModeButtons();
   }
 
   function isDrawMode() { return tool !== 'pan'; }
@@ -571,10 +624,22 @@
       text.textContent = 'Tap a drawing to delete it';
       finish.classList.add('hidden');
       back.classList.add('hidden');
+    } else if (tool === 'route') {
+      show = !routePreview;
+      text.textContent = 'Draw a rough path — we will snap it to nearby ' + (
+        routeMode === 'walk' ? 'footways' : routeMode === 'bike' ? 'cycleways' : 'roads'
+      );
+      finish.classList.add('hidden');
+      back.classList.add('hidden');
+    }
+    var modes = $('route-modes');
+    if (modes) {
+      modes.classList.toggle('hidden', tool !== 'route' || !!routePreview);
     }
     bar.classList.toggle('hidden', !show);
     bar.hidden = !show;
-    document.body.classList.toggle('has-hint', show);
+    document.body.classList.toggle('has-hint', show && !routePreview);
+    document.body.classList.toggle('has-route-card', !!routePreview);
   }
 
   function clearVertexMarkers() {
@@ -654,7 +719,7 @@
 
   function eventOnUi(target) {
     return !!(target && target.closest && target.closest(
-      '.top-ui, .dock, .hint-bar, .sheet, .install-tip, .toast, .leaflet-control, .leaflet-popup'
+      '.top-ui, .dock, .hint-bar, .route-card, .route-loading, .sheet, .install-tip, .toast, .leaflet-control, .leaflet-popup'
     ));
   }
 
@@ -689,6 +754,7 @@
     if (!isDrawMode()) return;
     if (eventOnUi(ev.target)) return;
     if (ev.isPrimary === false) return;
+    if (tool === 'route' && (routeBusy || routePreview)) return;
     if (tool === 'line' || tool === 'polygon' || tool === 'marker') {
       tapCandidate = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, latlng: containerLatLng(ev) };
       return;
@@ -703,8 +769,11 @@
       try { map.getContainer().setPointerCapture(ev.pointerId); } catch (e) { /* ignore */ }
     }
     if (draftLayer) { draft.removeLayer(draftLayer); draftLayer = null; }
-    if (tool === 'pen') {
-      draftLayer = L.polyline(dragPts, pathStyle(false)).addTo(draft);
+    if (tool === 'pen' || tool === 'route') {
+      var style = tool === 'route'
+        ? { color: color, weight: Math.max(4, weight), opacity: 0.45, lineJoin: 'round', lineCap: 'round' }
+        : pathStyle(false);
+      draftLayer = L.polyline(dragPts, style).addTo(draft);
     } else if (tool === 'rectangle') {
       draftLayer = L.rectangle(L.latLngBounds(dragStart, dragStart), pathStyle(true)).addTo(draft);
     } else if (tool === 'circle') {
@@ -716,7 +785,7 @@
     if (!dragging || ev.pointerId !== activePointer) return;
     ev.preventDefault();
     var ll = containerLatLng(ev);
-    if (tool === 'pen') {
+    if (tool === 'pen' || tool === 'route') {
       var last = dragPts[dragPts.length - 1];
       if (haversine(last, ll) < 0.3) return;
       dragPts.push(ll);
@@ -745,7 +814,12 @@
     ev.preventDefault();
     var ll = containerLatLng(ev);
     ignoreClickUntil = Date.now() + 400;
-    if (tool === 'pen') {
+    if (tool === 'route') {
+      if (ll) dragPts.push(ll);
+      var routePts = dragPts.slice();
+      cancelDraft();
+      snapRouteFromStroke(routePts);
+    } else if (tool === 'pen') {
       if (ll) dragPts.push(ll);
       var pts = simplify(dragPts, 2.2);
       if (pts.length >= 2 && pathLength(pts) >= 1) {
@@ -838,12 +912,19 @@
     var p = layer.featureProps || {};
     var title = ({
       pen: 'Freehand line', line: 'Path', polygon: 'Area',
-      rectangle: 'Rectangle', circle: 'Circle', marker: 'Pin'
+      rectangle: 'Rectangle', circle: 'Circle', marker: 'Pin',
+      route: ((ROUTE_MODES[p.mode] && ROUTE_MODES[p.mode].label) || 'Route') + ' route'
     })[p.tool] || 'Drawing';
     openSheet(title, function (body) {
       var meas = measurementFor(layer, p.tool);
       var extra = p.label ? '<p><strong>' + escapeHtml(p.label) + '</strong></p>' : '';
-      body.innerHTML = extra + '<p>' + escapeHtml(meas) + '</p>' +
+      var routeBtns = p.tool === 'route'
+        ? '<div class="btn-row">' +
+          '<button type="button" class="btn-block" id="sheet-gmaps">Google Maps</button>' +
+          '<button type="button" class="btn-block" id="sheet-gpx">Export GPX</button>' +
+          '</div>'
+        : '';
+      body.innerHTML = extra + '<p>' + escapeHtml(meas) + '</p>' + routeBtns +
         '<div class="btn-row">' +
         '<button type="button" class="btn-block" id="sheet-cancel">Close</button>' +
         '<button type="button" class="btn-block danger" id="sheet-ok">Delete</button>' +
@@ -853,6 +934,16 @@
         deleteLayer(layer);
         closeSheet();
       };
+      if (p.tool === 'route') {
+        var lls = flattenLatLngs(layer.getLatLngs());
+        $('sheet-gmaps').onclick = function () {
+          closeSheet();
+          openRouteInGoogleMaps(lls, p.mode || 'walk');
+        };
+        $('sheet-gpx').onclick = function () {
+          exportRouteGpx(lls, p.mode || 'walk', p.distance, p.duration);
+        };
+      }
     });
   }
 
@@ -893,6 +984,7 @@
       body.innerHTML =
         '<p>Drawings stay anchored to the map when you pan or zoom. Turn on a tool to draw; switch back to <strong>Pan</strong> to move the map with one finger.</p>' +
         '<p><strong>Pen</strong> is freehand. <strong>Line</strong> and <strong>Area</strong> add a point each time you tap — then press Done. <strong>Rect</strong> and <strong>Circle</strong> are drag gestures. <strong>Pin</strong> drops a labeled marker.</p>' +
+        '<p><strong>Route</strong> lets you sketch a rough path, then snaps it to the closest walk, bike, or car route. Keep it, export a GPX file, or open the directions in Google Maps.</p>' +
         '<p>Distances and areas use metric units. Work is auto-saved in this browser.</p>' +
         '<p><strong>iPhone Safari:</strong> Share button → Add to Home Screen.</p>' +
         '<p><strong>iPhone Chrome:</strong> Menu → Add to Home Screen. Chrome on iOS uses the same engine as Safari; install also works from Safari if the menu is missing.</p>' +
@@ -900,6 +992,342 @@
         '<div class="btn-row"><button type="button" class="btn-block primary" id="sheet-ok">Close</button></div>';
       $('sheet-ok').onclick = closeSheet;
     });
+  }
+
+
+  /* ---------- draw my route (map matching) ---------- */
+  function updateRouteModeButtons() {
+    document.querySelectorAll('#route-modes .mode').forEach(function (btn) {
+      btn.classList.toggle('is-active', btn.getAttribute('data-mode') === routeMode);
+    });
+  }
+
+  function setRouteMode(next) {
+    if (!ROUTE_MODES[next]) return;
+    var changed = next !== routeMode;
+    routeMode = next;
+    try { localStorage.setItem(MODE_KEY, routeMode); } catch (e) { /* ignore */ }
+    updateRouteModeButtons();
+    updateHint();
+    if (changed && routePreview && routePreview.sketchPts) {
+      var pts = routePreview.sketchPts.slice();
+      clearRoutePreview();
+      snapRouteFromStroke(pts);
+    }
+  }
+
+  function setRouteLoading(on) {
+    routeBusy = !!on;
+    var el = $('route-loading');
+    if (!el) return;
+    el.classList.toggle('hidden', !on);
+    el.hidden = !on;
+  }
+
+  function hideRouteCard() {
+    var card = $('route-card');
+    if (!card) return;
+    card.classList.add('hidden');
+    card.hidden = true;
+    document.body.classList.remove('has-route-card');
+  }
+
+  function showRouteCard(result, mode) {
+    var cfg = ROUTE_MODES[mode] || ROUTE_MODES.walk;
+    $('route-card-title').textContent = cfg.label + ' route';
+    $('route-card-stats').textContent = fmtDistance(result.distance) + ' · ' + fmtDuration(result.duration);
+    var card = $('route-card');
+    card.classList.remove('hidden');
+    card.hidden = false;
+    document.body.classList.add('has-route-card');
+  }
+
+  function clearRoutePreview() {
+    if (routeLayerGroup) {
+      routeLayerGroup.clearLayers();
+    }
+    routePreview = null;
+    hideRouteCard();
+    setRouteLoading(false);
+    if (tool === 'route') setMapInteractive(false);
+    updateHint();
+  }
+
+  function sampleByDistance(latlngs, count) {
+    if (!latlngs.length) return [];
+    if (count <= 1) return [latlngs[0]];
+    if (latlngs.length <= count) return latlngs.slice();
+    var total = pathLength(latlngs);
+    if (total <= 0) return [latlngs[0], latlngs[latlngs.length - 1]];
+    var out = [latlngs[0]];
+    var acc = 0;
+    var k = 1;
+    for (var i = 1; i < latlngs.length && k < count - 1; i++) {
+      var d = haversine(latlngs[i - 1], latlngs[i]);
+      var next = acc + d;
+      var target = total * k / (count - 1);
+      while (k < count - 1 && target <= next) {
+        var t = d ? (target - acc) / d : 0;
+        out.push(L.latLng(
+          latlngs[i - 1].lat + (latlngs[i].lat - latlngs[i - 1].lat) * t,
+          latlngs[i - 1].lng + (latlngs[i].lng - latlngs[i - 1].lng) * t
+        ));
+        k += 1;
+        target = total * k / (count - 1);
+      }
+      acc = next;
+    }
+    var last = latlngs[latlngs.length - 1];
+    if (out[out.length - 1].lat !== last.lat || out[out.length - 1].lng !== last.lng) out.push(last);
+    return out;
+  }
+
+  function prepareMatchPoints(latlngs) {
+    var simplified = simplify(latlngs, 3);
+    if (simplified.length < 2) simplified = latlngs.slice();
+    var spaced = [simplified[0]];
+    for (var i = 1; i < simplified.length; i++) {
+      if (haversine(spaced[spaced.length - 1], simplified[i]) >= 12) spaced.push(simplified[i]);
+    }
+    var last = simplified[simplified.length - 1];
+    if (haversine(spaced[spaced.length - 1], last) > 1) spaced.push(last);
+    if (spaced.length > MATCH_MAX_POINTS) spaced = sampleByDistance(spaced, MATCH_MAX_POINTS);
+    return spaced;
+  }
+
+  function coordsParam(latlngs) {
+    return latlngs.map(function (ll) {
+      return ll.lng.toFixed(6) + ',' + ll.lat.toFixed(6);
+    }).join(';');
+  }
+
+  function fetchJson(url, timeoutMs) {
+    var ctrl = new AbortController();
+    var t = setTimeout(function () { ctrl.abort(); }, timeoutMs || 8000);
+    return fetch(url, { signal: ctrl.signal, headers: { Accept: 'application/json' } })
+      .then(function (res) {
+        return res.json().then(function (data) {
+          return data;
+        }, function () {
+          throw new Error('Routing request failed');
+        });
+      })
+      .finally(function () { clearTimeout(t); });
+  }
+
+  function parseMatch(data) {
+    if (!data || data.code !== 'Ok') return null;
+    var matchings = data.matchings || [];
+    if (matchings.length !== 1) return null;
+    var m = matchings[0];
+    var coords = m.geometry && m.geometry.coordinates;
+    if (!coords || coords.length < 2) return null;
+    return {
+      latlngs: coords.map(function (c) { return L.latLng(c[1], c[0]); }),
+      distance: m.distance,
+      duration: m.duration,
+      source: 'match'
+    };
+  }
+
+  function parseRoute(data) {
+    if (!data || data.code !== 'Ok') return null;
+    var r = (data.routes || [])[0];
+    if (!r || !r.geometry || !r.geometry.coordinates || r.geometry.coordinates.length < 2) return null;
+    return {
+      latlngs: r.geometry.coordinates.map(function (c) { return L.latLng(c[1], c[0]); }),
+      distance: r.distance,
+      duration: r.duration,
+      source: 'route'
+    };
+  }
+
+  function osrmMatch(pts, mode) {
+    var cfg = ROUTE_MODES[mode];
+    var rad = pts.map(function () { return String(MATCH_RADIUS); }).join(';');
+    var url = cfg.matchUrl + '/' + coordsParam(pts) +
+      '?overview=full&geometries=geojson&gaps=split&radiuses=' + rad;
+    /* OSM.de /match often hangs; fail over quickly. The public car matcher is fast. */
+    var timeout = mode === 'car' ? 6000 : 2500;
+    return fetchJson(url, timeout).then(parseMatch, function () { return null; });
+  }
+
+  function osrmRoute(pts, mode) {
+    var cfg = ROUTE_MODES[mode];
+    var url = cfg.routeUrl + '/' + coordsParam(pts) + '?overview=full&geometries=geojson';
+    return fetchJson(url, 12000).then(parseRoute, function () { return null; });
+  }
+
+  function snapRouteFromStroke(rawPts) {
+    if (routeBusy) return;
+    if (!rawPts || rawPts.length < 2) {
+      toast('Draw a longer path along the streets');
+      return;
+    }
+    var pts = prepareMatchPoints(rawPts);
+    if (pts.length < 2 || pathLength(pts) < 25) {
+      toast('Draw a longer path along the streets');
+      return;
+    }
+    clearRoutePreview();
+    setRouteLoading(true);
+    var mode = routeMode;
+    var routePts = pts.length <= 20 ? pts : sampleByDistance(pts, 20);
+    var matchP = osrmMatch(pts, mode);
+    var routeP = osrmRoute(routePts, mode);
+
+    matchP.then(function (matched) {
+      if (matched) return matched;
+      return routeP.then(function (routed) {
+        if (routed) return routed;
+        throw new Error('no route');
+      });
+    }).then(function (result) {
+      showRoutePreview(rawPts, result, mode);
+    }).catch(function () {
+      toast("Couldn't find a road route for that drawing. Try following the streets more closely.");
+    }).finally(function () {
+      setRouteLoading(false);
+      updateHint();
+    });
+  }
+
+  function endpointIcon(letter, isEnd) {
+    return L.divIcon({
+      className: 'route-flag',
+      html: '<div class="route-endpoint' + (isEnd ? ' end' : '') + '">' + letter + '</div>',
+      iconSize: [22, 22],
+      iconAnchor: [11, 11]
+    });
+  }
+
+  function showRoutePreview(sketchPts, result, mode) {
+    if (!routeLayerGroup) routeLayerGroup = L.layerGroup().addTo(map);
+    routeLayerGroup.clearLayers();
+    var sketch = L.polyline(sketchPts, {
+      color: color,
+      weight: Math.max(4, weight),
+      opacity: 0.35,
+      lineJoin: 'round',
+      lineCap: 'round',
+      dashArray: '5 8',
+      interactive: false
+    }).addTo(routeLayerGroup);
+    L.polyline(result.latlngs, {
+      color: ROUTE_CASING,
+      weight: 11,
+      opacity: 0.9,
+      lineJoin: 'round',
+      lineCap: 'round',
+      interactive: false
+    }).addTo(routeLayerGroup);
+    var routeLine = L.polyline(result.latlngs, {
+      color: ROUTE_COLOR,
+      weight: 6,
+      opacity: 1,
+      lineJoin: 'round',
+      lineCap: 'round',
+      interactive: false
+    }).addTo(routeLayerGroup);
+    var start = result.latlngs[0];
+    var end = result.latlngs[result.latlngs.length - 1];
+    L.marker(start, { icon: endpointIcon('A', false), interactive: false, zIndexOffset: 800 }).addTo(routeLayerGroup);
+    L.marker(end, { icon: endpointIcon('B', true), interactive: false, zIndexOffset: 800 }).addTo(routeLayerGroup);
+    routePreview = {
+      sketchPts: sketchPts.slice(),
+      sketch: sketch,
+      routeLine: routeLine,
+      latlngs: result.latlngs,
+      distance: result.distance,
+      duration: result.duration,
+      mode: mode,
+      source: result.source
+    };
+    showRouteCard(result, mode);
+    updateHint();
+    setMapInteractive(true);
+    try {
+      map.fitBounds(routeLine.getBounds(), { padding: [48, 48], maxZoom: 17, animate: true });
+    } catch (e) { /* ignore */ }
+  }
+
+  function keepRoutePreview() {
+    if (!routePreview) return;
+    var p = routePreview;
+    var props = featureProps('route', {
+      mode: p.mode,
+      color: ROUTE_COLOR,
+      weight: 6,
+      distance: p.distance,
+      duration: p.duration,
+      source: p.source
+    });
+    var layer = L.polyline(p.latlngs, {
+      color: ROUTE_COLOR,
+      weight: 6,
+      opacity: 1,
+      lineJoin: 'round',
+      lineCap: 'round'
+    });
+    pushUndo();
+    attachLayer(layer, props);
+    persist();
+    if (routeLayerGroup) routeLayerGroup.clearLayers();
+    routePreview = null;
+    hideRouteCard();
+    updateHint();
+    setMapInteractive(tool === 'pan');
+    toast('Route saved');
+  }
+
+  function intermediateWaypoints(latlngs, maxN) {
+    if (latlngs.length < 3 || maxN <= 0) return [];
+    return sampleByDistance(latlngs, maxN + 2).slice(1, -1);
+  }
+
+  function googleDirUrl(latlngs, mode) {
+    var start = latlngs[0];
+    var end = latlngs[latlngs.length - 1];
+    var travel = (ROUTE_MODES[mode] || ROUTE_MODES.walk).travelmode;
+    var qs = 'api=1&origin=' + start.lat.toFixed(6) + ',' + start.lng.toFixed(6) +
+      '&destination=' + end.lat.toFixed(6) + ',' + end.lng.toFixed(6) +
+      '&travelmode=' + encodeURIComponent(travel);
+    var mids = intermediateWaypoints(latlngs, 8);
+    if (mids.length) {
+      qs += '&waypoints=' + mids.map(function (pt) {
+        return pt.lat.toFixed(6) + ',' + pt.lng.toFixed(6);
+      }).join('|');
+    }
+    return 'https://www.google.com/maps/dir/?' + qs;
+  }
+
+  function openRouteInGoogleMaps(latlngs, mode) {
+    if (!latlngs || latlngs.length < 2) return;
+    var a = document.createElement('a');
+    a.href = googleDirUrl(latlngs, mode);
+    a.target = '_blank';
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  function exportRouteGpx(latlngs, mode, distance, duration) {
+    if (!latlngs || latlngs.length < 2) return;
+    var cfg = ROUTE_MODES[mode] || ROUTE_MODES.walk;
+    var name = cfg.label + ' route';
+    var desc = [];
+    if (distance != null) desc.push(fmtDistance(distance));
+    if (duration != null) desc.push(fmtDuration(duration));
+    var pts = latlngs.map(function (ll) {
+      return '      <trkpt lat="' + ll.lat.toFixed(6) + '" lon="' + ll.lng.toFixed(6) + '"></trkpt>';
+    }).join('\n');
+    var xml = '<?xml version="1.0" encoding="UTF-8"?>\n' +
+      '<gpx version="1.1" creator="Draw Map" xmlns="http://www.topografix.com/GPX/1/1">\n' +
+      '  <metadata><name>' + name + '</name><desc>' + desc.join(' · ') + '</desc></metadata>\n' +
+      '  <trk><name>' + name + '</name><type>' + cfg.travelmode + '</type>\n' +
+      '    <trkseg>\n' + pts + '\n    </trkseg>\n  </trk>\n</gpx>\n';
+    shareOrDownload(new Blob([xml], { type: 'application/gpx+xml' }), 'draw-map-route.gpx', name);
   }
 
   /* ---------- search / locate / layers / gmaps ---------- */
@@ -1282,6 +1710,7 @@
     drawn = L.featureGroup().addTo(map);
     draft = L.layerGroup().addTo(map);
     locateLayer = L.layerGroup().addTo(map);
+    routeLayerGroup = L.layerGroup().addTo(map);
 
     map.on('click', onMapClick);
     map.on('moveend', function () { persist(); });
@@ -1369,6 +1798,30 @@
         $('layer-menu').classList.add('hidden');
       }
     });
+
+    document.querySelectorAll('#route-modes .mode').forEach(function (btn) {
+      btn.addEventListener('click', function (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        setRouteMode(btn.getAttribute('data-mode'));
+      });
+    });
+    $('btn-route-discard').addEventListener('click', function () {
+      clearRoutePreview();
+      toast('Route discarded');
+    });
+    $('btn-route-keep').addEventListener('click', keepRoutePreview);
+    $('btn-route-gmaps').addEventListener('click', function () {
+      if (routePreview) openRouteInGoogleMaps(routePreview.latlngs, routePreview.mode);
+    });
+    $('btn-route-gpx').addEventListener('click', function () {
+      if (routePreview) exportRouteGpx(routePreview.latlngs, routePreview.mode, routePreview.distance, routePreview.duration);
+    });
+    try {
+      var savedMode = localStorage.getItem(MODE_KEY);
+      if (ROUTE_MODES[savedMode]) routeMode = savedMode;
+    } catch (e) { /* ignore */ }
+    updateRouteModeButtons();
 
     $('btn-dismiss-tip').addEventListener('click', function () {
       $('install-tip').classList.add('hidden');

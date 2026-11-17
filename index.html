@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Draw Map">
+  <meta name="theme-color" content="#12151c">
+  <meta name="description" content="Draw lines, shapes, and notes on a map. Works on iPhone in Chrome and Safari.">
+  <meta name="format-detection" content="telephone=no">
+  <title>Draw Map</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="icons/icon-180.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+  <link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png">
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <div id="map" role="application" aria-label="Map"></div>
+
+  <div class="top-ui" id="top-ui">
+    <form id="search-form" autocomplete="off" action="#" class="search-form">
+      <label class="visually-hidden" for="search-input">Search places</label>
+      <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/>
+        <path d="M20 20l-3.5-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      <input id="search-input" type="search" placeholder="Search places" enterkeyhint="search"
+             autocomplete="off" autocorrect="off" spellcheck="false" inputmode="search">
+      <button type="button" id="btn-search-clear" class="icon-btn ghost hidden" aria-label="Clear search">
+        <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round"/></svg>
+      </button>
+    </form>
+    <button type="button" id="btn-layers" class="icon-btn" aria-label="Switch map type" title="Map type">
+      <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 3l9 5-9 5L3 8l9-5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+        <path d="M4 13l8 4.5L20 13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+        <path d="M4 17l8 4.5L20 17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+      </svg>
+    </button>
+    <button type="button" id="btn-locate" class="icon-btn" aria-label="Locate me" title="Locate me">
+      <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r="3" fill="currentColor"/>
+        <circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.8"/>
+        <path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+      </svg>
+    </button>
+    <button type="button" id="btn-menu" class="icon-btn" aria-label="Menu" title="Menu">
+      <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M5 7h14M5 12h14M5 17h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+    </button>
+    <ul id="search-results" class="search-results hidden" role="listbox" aria-label="Search results"></ul>
+    <div id="layer-menu" class="layer-menu hidden" role="menu">
+      <button type="button" data-layer="streets" class="layer-option is-active">Streets</button>
+      <button type="button" data-layer="satellite" class="layer-option">Satellite</button>
+    </div>
+  </div>
+
+  <div id="hint-bar" class="hint-bar hidden" hidden>
+    <p id="hint-text">Tap to add points</p>
+    <div class="hint-actions">
+      <button type="button" id="btn-cancel-draft" class="chip">Cancel</button>
+      <button type="button" id="btn-undo-vertex" class="chip hidden">Back</button>
+      <button type="button" id="btn-finish-draft" class="chip primary">Done</button>
+    </div>
+  </div>
+
+  <div id="dock" class="dock">
+    <div class="dock-row tools" role="toolbar" aria-label="Drawing tools">
+      <button type="button" id="btn-pan" class="tool is-active" data-tool="pan" aria-pressed="true" aria-label="Pan map">
+        <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11V5a1.5 1.5 0 013 0v6m0 0V7a1.5 1.5 0 013 0v7m0 0V9a1.5 1.5 0 013 0v8.5a3.5 3.5 0 01-3.5 3.5h-2.2A5.3 5.3 0 018 17.2V15m0-4L6.2 13.2A2 2 0 005 14.8V15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>Pan</span>
+      </button>
+      <button type="button" id="btn-pen" class="tool" data-tool="pen" aria-pressed="false" aria-label="Freehand pen">
+        <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l4.2-1.1L19 8.1a2 2 0 00-2.8-2.8L5.5 16.1 4 20z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M14.8 6.7l2.8 2.8" stroke="currentColor" stroke-width="1.7"/></svg>
+        <span>Pen</span>
+      </button>
+      <button type="button" id="btn-line" class="tool" data-tool="line" aria-pressed="false" aria-label="Straight line or path">
+        <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 18l14-12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="5" cy="18" r="2.1" fill="currentColor"/><circle cx="19" cy="6" r="2.1" fill="currentColor"/></svg>
+        <span>Line</span>
+      </button>
+      <button type="button" id="btn-polygon" class="tool" data-tool="polygon" aria-pressed="false" aria-label="Polygon area">
+        <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4h7l5 7-4 9H6L4 11 7 4z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+        <span>Area</span>
+      </button>
+      <button type="button" id="btn-rectangle" class="tool" data-tool="rectangle" aria-pressed="false" aria-label="Rectangle">
+        <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="6" width="15" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>
+        <span>Rect</span>
+      </button>
+      <button type="button" id="btn-circle" class="tool" data-tool="circle" aria-pressed="false" aria-label="Circle">
+        <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>
+        <span>Circle</span>
+      </button>
+      <button type="button" id="btn-marker" class="tool" data-tool="marker" aria-pressed="false" aria-label="Marker with label">
+        <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s7-6.1 7-11a7 7 0 10-14 0c0 4.9 7 11 7 11z" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="10" r="2.2" fill="currentColor"/></svg>
+        <span>Pin</span>
+      </button>
+      <button type="button" id="btn-erase" class="tool" data-tool="erase" aria-pressed="false" aria-label="Eraser, delete a shape">
+        <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 16l8-8 6.5 6.5-4.5 4.5H8L4 16z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M8.5 20H20" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+        <span>Erase</span>
+      </button>
+    </div>
+    <div class="dock-row options">
+      <div id="color-swatches" class="swatches" role="group" aria-label="Color"></div>
+      <label class="width-ctrl" title="Stroke width">
+        <span id="width-label">4 px</span>
+        <input id="width-slider" type="range" min="2" max="16" step="1" value="4" aria-label="Stroke width">
+      </label>
+      <button type="button" id="btn-undo" class="icon-btn" aria-label="Undo" title="Undo" disabled>
+        <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8H4v4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 12a8 8 0 108-8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      </button>
+      <button type="button" id="btn-clear" class="icon-btn danger" aria-label="Clear all drawings" title="Clear all">
+        <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M9 7V5h6v2m-8 0l.7 12h8.6L17 7" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div id="sheet" class="sheet hidden" hidden>
+    <div class="sheet-backdrop" id="sheet-backdrop"></div>
+    <div class="sheet-card" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+      <div class="sheet-handle" aria-hidden="true"></div>
+      <h2 id="sheet-title" class="sheet-title"></h2>
+      <div id="sheet-body" class="sheet-body"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+  <div id="install-tip" class="install-tip hidden" hidden>
+    <p>Add this app to your Home Screen for full-screen use: in <strong>Safari</strong>, tap Share then <strong>Add to Home Screen</strong>. In <strong>Chrome</strong>, open the menu and choose <strong>Add to Home Screen</strong>.</p>
+    <button type="button" id="btn-dismiss-tip" class="chip">Got it</button>
+  </div>
+
+  <script src="vendor/leaflet/leaflet.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
